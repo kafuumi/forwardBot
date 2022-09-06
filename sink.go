@@ -1,6 +1,8 @@
 package forwardBot
 
-import "forwardBot/push"
+import (
+	"forwardBot/push"
+)
 
 type Sink interface {
 	Receive(msg *push.Msg) error
@@ -16,11 +18,4 @@ func NewPushSink(p push.Pusher) *PushSink {
 
 func (p *PushSink) Receive(msg *push.Msg) error {
 	return p.pusher.PushMsg(msg)
-}
-
-type LogSink struct {
-}
-
-func (l *LogSink) Receive(msg *push.Msg) error {
-	return nil
 }

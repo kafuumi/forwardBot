@@ -20,6 +20,7 @@ var (
 		{"Accept-Language", "zh-CN,zh;q=0.9"},
 		{"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36"},
 	}
+	defaultClient = New(5)
 )
 
 type C struct {
@@ -96,4 +97,12 @@ func (c *C) Post(link string, params D, body io.Reader,
 func (c *C) Get(link string, params D, body io.Reader,
 	headers ...E) (buf *bytes.Buffer, err error) {
 	return c.request(http.MethodGet, link, params, body, headers...)
+}
+
+func Get(link string, params D, headers ...E) (buf *bytes.Buffer, err error) {
+	return defaultClient.Get(link, params, nil, headers...)
+}
+
+func Post(link string, params D, body io.Reader, headers ...E) (buf *bytes.Buffer, err error) {
+	return defaultClient.Post(link, params, body, headers...)
 }

@@ -11,6 +11,6 @@ type Msg struct {
 	Author string
 	Title  string
 	Text   string
-	Img    string
+	Img    []string
 	Src    string
 }

@@ -1,10 +1,16 @@
 package push
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"forwardBot/req"
+	"net/url"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tidwall/gjson"
 )
@@ -13,28 +19,56 @@ import (
 type DingTalk struct {
 	webhook string //webhook地址
 	secret  string //加签密钥
-	client  *req.C
 }
 
 func NewDingTalk(webhook, secret string) *DingTalk {
 	return &DingTalk{
 		webhook: webhook,
 		secret:  secret,
-		client:  req.New(5),
 	}
+}
+
+var (
+	markdownTable = map[rune]string{
+		'*':  `\*`,
+		'[':  `\[`,
+		']':  `\]`,
+		'(':  `\(`,
+		')':  `\)`,
+		'\n': "\n\n",
+		'>':  `\>`,
+		'-':  `\-`,
+	}
+)
+
+func escapeMarkdown(src string) string {
+	res := strings.Builder{}
+	for _, c := range src {
+		if cc, ok := markdownTable[c]; ok {
+			res.WriteString(cc)
+		} else {
+			res.WriteRune(c)
+		}
+	}
+	return res.String()
 }
 
 func (d *DingTalk) PushMsg(m *Msg) error {
 	text := strings.Builder{}
 	text.WriteString(m.Times.Format("2006-01-02 15:04") + "\n\n")
 	text.WriteString(fmt.Sprintf("%s %s\n\n", m.Author, m.Title))
-	text.WriteString(m.Text + "\n\n")
+	text.WriteString(escapeMarkdown(m.Text) + "\n\n")
 	if m.Src != "" {
 		text.WriteString(fmt.Sprintf("<a>%s</a>\n\n", m.Src))
 		text.WriteString(fmt.Sprintf("[点击打开链接](%s)\n\n", m.Src))
 	}
-	if m.Img != "" {
-		text.WriteString(fmt.Sprintf("![封面](%s)", m.Img))
+	if len(m.Img) != 0 {
+		for i := range m.Img {
+			text.WriteString(fmt.Sprintf("![封面](%s)", m.Img[i]))
+			if i != len(m.Img)-1 {
+				text.WriteString("\n\n")
+			}
+		}
 	}
 	body := req.D{
 		{"msgtype", "markdown"},
@@ -44,7 +78,7 @@ func (d *DingTalk) PushMsg(m *Msg) error {
 		}},
 	}
 	timestamp, sign := signPusher(d.secret)
-	resp, err := d.client.Post(fmt.Sprintf("%s&timestamp=%s&sign=%s", d.webhook, timestamp, sign),
+	resp, err := req.Post(fmt.Sprintf("%s&timestamp=%s&sign=%s", d.webhook, timestamp, sign),
 		nil, strings.NewReader(body.Json()),
 		req.E{Name: "Content-Type", Value: "application/json"})
 	if err != nil {
@@ -59,4 +93,16 @@ func (d *DingTalk) PushMsg(m *Msg) error {
 		return errors.New(data.Get("errmsg").String())
 	}
 	return nil
+}
+
+// 加签
+func signPusher(secret string) (timestamp string, sign string) {
+	timestamp = strconv.FormatInt(time.Now().UnixMilli(), 10)
+	strToSign := []byte(timestamp + "\n" + secret)
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write(strToSign)
+	signData := mac.Sum(nil)
+	sign = url.QueryEscape(base64.StdEncoding.EncodeToString(signData))
+	return
 }
