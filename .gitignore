@@ -89,4 +89,4 @@ fabric.properties
 # vendor/
 
 ### Custom
-cmd/bot
+cmd
