@@ -6,6 +6,12 @@ import (
 	"forwardBot/push"
 )
 
+const (
+	BiliLiveMsg = 1 << iota
+	BiliDynMsg
+	TikTokLiveMsg
+)
+
 type Bot struct {
 	sources []Source
 	sinks   []Sink
@@ -19,11 +25,19 @@ func NewBot(buf int) *Bot {
 }
 
 func (b *Bot) AppendSource(s ...Source) {
-	b.sources = append(b.sources, s...)
+	for _, source := range s {
+		if source != nil {
+			b.sources = append(b.sources, source)
+		}
+	}
 }
 
 func (b *Bot) AppendSink(s ...Sink) {
-	b.sinks = append(b.sinks, s...)
+	for _, sink := range s {
+		if sink != nil {
+			b.sinks = append(b.sinks, sink)
+		}
+	}
 }
 
 func (b *Bot) Run(ctx context.Context) {

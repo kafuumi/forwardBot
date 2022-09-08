@@ -8,6 +8,7 @@ import (
 	"forwardBot/req"
 	"github.com/pkg/errors"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -26,6 +27,18 @@ const (
 
 var (
 	ErrEmptyRespData = errors.New("empty data") //http响应体为空
+	//liveInfo对象池
+	liveInfoPool = &sync.Pool{
+		New: func() any {
+			return new(LiveInfo)
+		},
+	}
+	//DynamicInfo对象池
+	dynInfoPool = &sync.Pool{
+		New: func() any {
+			return new(DynamicInfo)
+		},
+	}
 )
 
 // BiliLiveSource 获取b站直播间是否开播状态
@@ -43,11 +56,26 @@ type BaseInfo struct {
 type LiveInfo struct {
 	BaseInfo
 	Mid        int64  //uid
+	MidStr     string //字符串形式的uid，抖音的uid和房间号id较长，可能会超范围，作为扩展用，b站返回的数据中为空字符串
 	Uname      string //昵称
 	LiveStatus bool   //是否开播
 	RoomId     int    //房间号
+	RoomIdStr  string
 	Title      string //房间标题
 	Cover      string //封面
+}
+
+func (l *LiveInfo) Reset() {
+	l.Code = 0
+	l.Msg = ""
+	l.Mid = 0
+	l.MidStr = ""
+	l.Uname = ""
+	l.LiveStatus = false
+	l.RoomId = 0
+	l.RoomIdStr = ""
+	l.Title = ""
+	l.Cover = ""
 }
 
 func NewBiliLiveSource(uid []int64) *BiliLiveSource {
@@ -85,7 +113,7 @@ func getInfo(mid int64) (info *LiveInfo, err error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "read bili resp data")
 	}
-	info = &LiveInfo{}
+	info = liveInfoPool.Get().(*LiveInfo)
 	data, code, msg := checkBiliData(result)
 	if code != 0 {
 		info.Code = code
@@ -120,10 +148,13 @@ func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 				info, err := getInfo(id)
 				if err != nil {
 					//TODO
+					fmt.Println(err)
 					continue
 				}
 				//当前开播状态和已经记录的开播状态相同，说明已经发送过消息
 				if info.LiveStatus == b.living[info.Mid] {
+					info.Reset()
+					liveInfoPool.Put(info)
 					continue
 				}
 				msg := &push.Msg{
@@ -149,6 +180,9 @@ func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					}
 				}
 				ch <- msg
+				info.Reset()
+				liveInfoPool.Put(info)
+				msg.Flag = BiliLiveMsg
 				time.Sleep(100 * time.Millisecond)
 			}
 		}
@@ -180,6 +214,15 @@ type DynamicInfo struct {
 	times  time.Time //动态发布时间
 }
 
+func (d *DynamicInfo) Reset() {
+	d.types = ""
+	d.id = ""
+	d.text = ""
+	d.img = nil
+	d.author = ""
+	d.src = ""
+}
+
 func NewBiliDynamicSource(uid []int64) *BiliDynamicSource {
 	return &BiliDynamicSource{
 		uid: uid,
@@ -198,6 +241,7 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 				infos, err := space(id, now)
 				if err != nil {
 					//TODO
+					fmt.Println(err)
 					continue
 				}
 				for _, info := range infos {
@@ -210,6 +254,9 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 						Src:    info.src,
 					}
 					ch <- msg
+					info.Reset()
+					dynInfoPool.Put(info)
+					msg.Flag = BiliDynMsg
 				}
 				time.Sleep(100 * time.Millisecond)
 			}
@@ -237,19 +284,24 @@ func space(id int64, now time.Time) (infos []*DynamicInfo, err error) {
 	}
 	items := data.Get("items").Array()
 
-	res := make([]*DynamicInfo, 0, len(items))
+	infos = make([]*DynamicInfo, 0, len(items))
 	for _, item := range items {
 		info := parseDynamic(&item)
-		if info != nil && now.Unix()-info.times.Unix() <= int64(interval/time.Second) {
-			res = append(res, info)
+		if info != nil {
+			if now.Sub(info.times) <= interval {
+				infos = append(infos, info)
+			} else {
+				info.Reset()
+				dynInfoPool.Put(info)
+			}
 		}
 	}
-	return res, nil
+	return infos, nil
 }
 
 func parseDynamic(item *gjson.Result) *DynamicInfo {
 	types := item.Get("type").String()
-	info := &DynamicInfo{}
+	info := dynInfoPool.Get().(*DynamicInfo)
 	info.id = item.Get("id_str").String()
 	info.src = dynamicUrlPrefix + info.id
 

@@ -1,0 +1,22 @@
+msgBuf: 10
+
+bili:
+  live:
+    - 672342685
+  dynamic:
+    - 703007996
+
+tiktok:
+  nonce: ""
+  signature: ""
+  users:
+    - "804284713107"
+
+dingTalk:
+  webhook: ""
+  secret: ""
+
+cqBot:
+  host: ""
+  token: ""
+  bufSize: 10

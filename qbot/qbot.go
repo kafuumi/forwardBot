@@ -75,8 +75,12 @@ func atMsgEventHandler() event.ATMessageEventHandler {
 				delete(channelIdTable, data.GuildID)
 				content = "取消成功"
 			default:
-				channelIdTable[data.GuildID] = data.ChannelID
-				content = "设置成功，推送消息将发送至当前子频道"
+				if channelIdTable[data.GuildID] == data.ChannelID {
+					content = "当前频道已经设置订阅"
+				} else {
+					channelIdTable[data.GuildID] = data.ChannelID
+					content = "设置成功，推送消息将发送至当前子频道"
+				}
 			}
 		} else {
 			content = "仅限频主和管理员设置"

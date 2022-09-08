@@ -18,19 +18,32 @@ var (
 	comHeader = D{
 		{"Accept-Encoding", "gzip, deflate, br"},
 		{"Accept-Language", "zh-CN,zh;q=0.9"},
+		{"cache-control", "no-cache"},
+		{"pragma", "no-cache"},
+		{"sec-fetch-mod", "navigate"},
+		{"sec-fetch-site", "same-site"},
+		{"sec-fetch-user", "?1"},
 		{"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/105.0.0.0 Safari/537.36"},
 	}
 	defaultClient = New(5)
 )
 
 type C struct {
-	client *http.Client
+	client  *http.Client
+	cookies map[string]string
 }
 
 func New(timeout int) *C {
 	return &C{
 		client: &http.Client{Timeout: time.Duration(timeout) * time.Second},
 	}
+}
+
+func (c *C) SetCookies(name, value string) {
+	if c.cookies == nil {
+		c.cookies = make(map[string]string)
+	}
+	c.cookies[name] = value
 }
 
 // 选择对应的解压算法解压响应体
@@ -69,6 +82,13 @@ func (c *C) request(method, link string, params D, body io.Reader,
 	}
 	for i := range headers {
 		req.Header.Set(headers[i].Name, fmt.Sprint(headers[i].Value))
+	}
+	for k := range c.cookies {
+		req.AddCookie(&http.Cookie{
+			Name:  k,
+			Value: c.cookies[k],
+			Path:  "/",
+		})
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {

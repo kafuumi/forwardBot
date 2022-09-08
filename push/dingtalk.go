@@ -62,12 +62,10 @@ func (d *DingTalk) PushMsg(m *Msg) error {
 		text.WriteString(fmt.Sprintf("<a>%s</a>\n\n", m.Src))
 		text.WriteString(fmt.Sprintf("[点击打开链接](%s)\n\n", m.Src))
 	}
-	if len(m.Img) != 0 {
-		for i := range m.Img {
-			text.WriteString(fmt.Sprintf("![封面](%s)", m.Img[i]))
-			if i != len(m.Img)-1 {
-				text.WriteString("\n\n")
-			}
+	for i := range m.Img {
+		text.WriteString(fmt.Sprintf("![封面](%s)", m.Img[i]))
+		if i != len(m.Img)-1 {
+			text.WriteString("\n\n")
 		}
 	}
 	body := req.D{
