@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"forwardBot/push"
 	"forwardBot/qbot"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"strconv"
 	"strings"
@@ -26,25 +27,33 @@ func NewPushSink(p push.Pusher) *PushSink {
 
 func (p *PushSink) Receive(msg *push.Msg) error {
 	logger.Info("PushSink 推送消息")
-	return p.pusher.PushMsg(msg)
+	err := p.pusher.PushMsg(msg)
+	if err != nil {
+		return errors.Wrap(err, "PushSink推送消息失败")
+	} else {
+		logger.Info("PushSink 推送消息成功")
+	}
+	return nil
 }
 
-// TODO 完善指令
 const (
 	CQBotCmdHelp             = "/啵啵"
+	CQBotCmdAll              = "/订阅全部"
+	CQBotCmdAllCancel        = "/取消订阅"
 	CQBotCmdBiliLive         = "/b站开播"
+	CQBotCmdBiliLiveCancel   = "/取消b站开播"
 	CQBotCmdBiliDyn          = "/b站动态"
-	CQBotCmdBiliLiveCancel   = "/取消b站开播订阅"
-	CQBotCmdBiliDynCancel    = "/取消b站动态订阅"
+	CQBotCmdBiliDynCancel    = "/取消b站动态"
 	CQBotCmdTiktokLive       = "/抖音开播"
-	CQBotCmdTiktokLiveCancel = "/取消抖音开播订阅"
+	CQBotCmdTiktokLiveCancel = "/取消抖音开播"
+	CQBotCmdPushTest         = "/推送测试"
 )
+const AllMsyNum = 3
 
 type CQBotSink struct {
 	bot       *qbot.CQBot
-	table     map[uint64]uint64 //接收推送消息的频道
+	table     map[uint64][]uint64 //接收推送消息的频道
 	bufSize   int
-	flag      map[uint64]int
 	lock      sync.RWMutex
 	heartbeat int64 //上一次收到心跳包的时间
 }
@@ -72,15 +81,15 @@ func NewCQBotSink(host, token string, bufSize int) *CQBotSink {
 	})
 	return &CQBotSink{
 		bot:     qbot.NewCQBot(host, token),
-		table:   make(map[uint64]uint64),
+		table:   make(map[uint64][]uint64),
 		bufSize: bufSize,
-		flag:    make(map[uint64]int),
 	}
 }
 
 func (c *CQBotSink) Receive(msg *push.Msg) error {
-	logger.Debug("CQBot发送消息")
+	logger.Info("CQBot发送消息")
 	if len(c.table) == 0 {
+		logger.Info("无频道订阅消息")
 		return nil
 	}
 	text := strings.Builder{}
@@ -88,8 +97,8 @@ func (c *CQBotSink) Receive(msg *push.Msg) error {
 	text.WriteByte('\n')
 	text.WriteString(fmt.Sprintf("%s %s\n", msg.Author, msg.Title))
 	text.WriteString(msg.Text)
-	text.WriteByte('\n')
 	if msg.Src != "" {
+		text.WriteByte('\n')
 		text.WriteString(msg.Src)
 	}
 	for i := range msg.Img {
@@ -105,13 +114,21 @@ func (c *CQBotSink) Receive(msg *push.Msg) error {
 	var err error
 	c.lock.RLock()
 	defer c.lock.RUnlock()
-	for gId, cId := range c.table {
-		cFlag, flag := c.flag[gId], msg.Flag
-		if cFlag&flag == 0 {
+	for gId, cIds := range c.table {
+		index := msg.Flag
+		if index >= len(cIds) {
+			logger.WithFields(logrus.Fields{
+				"index":     index,
+				"len(cIds)": len(cIds),
+			}).Warn("未知错误，不应该发生的情况")
+			continue
+		}
+		cId := cIds[index]
+		if cId == 0 {
 			logger.WithFields(logrus.Fields{
 				"guildId":   gId,
 				"channelId": cId,
-				"flag":      flag,
+				"flag":      msg.Flag,
 			}).Debug("当前频道未订阅该消息")
 			continue
 		}
@@ -189,11 +206,25 @@ func (c *CQBotSink) Listen(ctx context.Context) error {
 						"qq": strconv.FormatUint(msg.SenderId, 10),
 					},
 				}
-				_ = c.bot.SendGuildMsg(gId, cId,
-					fmt.Sprintf("%s当前可用指令：\n%s\n%s\n%s\n%s\n%s\n%s",
-						at.String(), CQBotCmdBiliDyn, CQBotCmdBiliLive,
-						CQBotCmdBiliDynCancel, CQBotCmdBiliLiveCancel,
-						CQBotCmdTiktokLive, CQBotCmdTiktokLiveCancel))
+				content := fmt.Sprintf("%s当前可用指令：\n"+
+					"%s 订阅所有消息\n"+
+					"%s 取消消息订阅\n"+
+					"%s 订阅b站开播消息\n"+
+					"%s\n"+
+					"%s 订阅b站动态更新消息\n"+
+					"%s\n"+
+					"%s 订阅抖音开播消息\n"+
+					"%s\n"+
+					"%s", at.String(), CQBotCmdAll, CQBotCmdAllCancel,
+					CQBotCmdBiliLive, CQBotCmdBiliLiveCancel,
+					CQBotCmdBiliDyn, CQBotCmdBiliDynCancel,
+					CQBotCmdTiktokLive, CQBotCmdTiktokLiveCancel,
+					CQBotCmdPushTest)
+				_ = c.bot.SendGuildMsg(gId, cId, content)
+			case CQBotCmdAll:
+				c.SubscribeAll(gId, cId)
+			case CQBotCmdAllCancel:
+				c.UnsubscribeAll(gId, cId)
 			case CQBotCmdBiliDyn:
 				c.Subscribe(gId, cId, BiliDynMsg)
 			case CQBotCmdBiliLive:
@@ -213,17 +244,79 @@ func (c *CQBotSink) Listen(ctx context.Context) error {
 	}
 }
 
+func (c *CQBotSink) SubscribeAll(gId, cId uint64) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+
+	cIds := c.table[gId]
+	var err error
+	if len(cIds) == 0 {
+		cIds = make([]uint64, AllMsyNum)
+	}
+	//当前频道是否已经订阅
+	ok := true
+	for i := range cIds {
+		if cIds[i] != cId {
+			cIds[i] = cId
+			ok = false
+		}
+	}
+	c.table[gId] = cIds
+	if ok {
+		err = c.bot.SendGuildMsg(gId, cId, "当前频道已经订阅消息")
+	} else {
+		err = c.bot.SendGuildMsg(gId, cId, "订阅成功")
+	}
+	if err != nil {
+		logger.WithFields(logrus.Fields{
+			"guildId":   gId,
+			"channelId": cId,
+			"err":       err,
+		}).Error("发送频道消息失败")
+	}
+}
+
+func (c *CQBotSink) UnsubscribeAll(gId, cId uint64) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	var err error
+	if _, ok := c.table[gId]; ok {
+		delete(c.table, gId)
+		err = c.bot.SendGuildMsg(gId, cId, "取消成功")
+	} else {
+		err = c.bot.SendGuildMsg(gId, cId, "当前频道未订阅消息")
+	}
+	if err != nil {
+		logger.WithFields(logrus.Fields{
+			"guildId":   gId,
+			"channelId": cId,
+			"err":       err,
+		}).Error("发送频道消息失败")
+	}
+}
+
 func (c *CQBotSink) Subscribe(gId, cId uint64, mask int) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	flag := c.flag[gId]
-	if flag&mask != 0 && c.table[gId] == cId {
-		_ = c.bot.SendGuildMsg(gId, cId, "当前频道已经设置订阅")
+	cIds := c.table[gId]
+	if len(cIds) == 0 {
+		cIds = make([]uint64, AllMsyNum)
+	}
+	var err error
+	if cIds[mask] == cId {
+		err = c.bot.SendGuildMsg(gId, cId, "当前频道已经设置订阅")
 	} else {
-		c.flag[gId] = flag | mask
-		c.table[gId] = cId
-		_ = c.bot.SendGuildMsg(gId, cId, "订阅成功")
+		cIds[mask] = cId
+		c.table[gId] = cIds
+		err = c.bot.SendGuildMsg(gId, cId, "订阅成功")
+	}
+	if err != nil {
+		logger.WithFields(logrus.Fields{
+			"guildId":   gId,
+			"channelId": cId,
+			"err":       err,
+		}).Error("发送频道消息失败")
 	}
 }
 
@@ -231,15 +324,29 @@ func (c *CQBotSink) Unsubscribe(gId, cId uint64, mask int) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	flag := c.flag[gId]
-	if flag&mask == 1 {
-		flag &= ^mask
-		c.flag[gId] = flag
-		_ = c.bot.SendGuildMsg(gId, cId, "取消成功")
+	cIds := c.table[gId]
+	var err error
+	if len(cIds) != 0 && cIds[mask] == cId {
+		cIds[mask] = 0
+		c.table[gId] = cIds
+		err = c.bot.SendGuildMsg(gId, cId, "取消成功")
 	} else {
-		_ = c.bot.SendGuildMsg(gId, cId, "当前频道未订阅消息")
+		err = c.bot.SendGuildMsg(gId, cId, "当前频道未订阅消息")
 	}
-	if flag == 0 {
-		delete(c.table, gId)
+	if err != nil {
+		logger.WithFields(logrus.Fields{
+			"guildId":   gId,
+			"channelId": cId,
+			"err":       err,
+		}).Error("发送频道消息失败")
+	}
+	if len(cIds) != 0 {
+		num := uint64(0)
+		for i := range cIds {
+			num |= cIds[i]
+		}
+		if num == 0 {
+			delete(c.table, gId)
+		}
 	}
 }

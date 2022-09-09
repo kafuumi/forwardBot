@@ -78,7 +78,7 @@ func (t *TiktokLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					logger.WithFields(logrus.Fields{
 						"id":   id,
 						"name": info.Uname,
-					}).Info("抖音开播了")
+					}).Debug("抖音开播了")
 					msg.Title = "抖音开播了"
 					msg.Text = fmt.Sprintf("标题：\"%s\"", info.Title)
 					msg.Img = []string{info.Cover}
@@ -88,7 +88,7 @@ func (t *TiktokLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					logger.WithFields(logrus.Fields{
 						"id":   id,
 						"name": info.Uname,
-					}).Info("抖音下播了")
+					}).Debug("抖音下播了")
 					msg.Title = "抖音下播了"
 					msg.Text = "😭😭😭"
 				}

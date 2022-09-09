@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	BiliLiveMsg = 1 << iota
+	BiliLiveMsg = iota
 	BiliDynMsg
 	TikTokLiveMsg
 )
@@ -74,7 +74,6 @@ func (b *Bot) Run(ctx context.Context) {
 				"flag":     msg.Flag,
 			}).Info("接收到msg")
 			for _, s := range b.sinks {
-				logger.Info("bot发送消息")
 				go func(s Sink) {
 					err := s.Receive(msg)
 					if err != nil {

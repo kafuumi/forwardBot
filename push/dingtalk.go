@@ -88,7 +88,7 @@ func (d *DingTalk) PushMsg(m *Msg) error {
 	data := gjson.ParseBytes(resp.Bytes())
 	code := data.Get("errcode").Int()
 	if code != 0 {
-		return errors.New(data.Get("errmsg").String())
+		return errors.New(fmt.Sprintf("errcode=%d, errmsg=%s", code, data.Get("errmsg").String()))
 	}
 	return nil
 }
