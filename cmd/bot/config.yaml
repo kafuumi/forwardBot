@@ -1,4 +1,4 @@
-msgBuf: 10
+msgBuf: 16
 logLevel: "Debug"
 
 bili:
@@ -20,4 +20,4 @@ dingTalk:
 cqBot:
   host: ""
   token: ""
-  bufSize: 10
+  bufSize: 16

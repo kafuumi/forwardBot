@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	Version = "bot: v0.1.4"
+	Version = "bot: v0.1.5"
 )
 
 var (

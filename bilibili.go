@@ -23,7 +23,8 @@ const (
 	videoUrlPrefix   = "https://www.bilibili.com/video/"
 	articleUrlPrefix = "https://www.bilibili.com/read/cv"
 	musicUrlPrefix   = "https://www.bilibili.com/audio/au"
-	interval         = time.Duration(10) * time.Second
+	interval         = 10 * time.Second
+	waitInterval     = 100 * time.Millisecond
 )
 
 var (
@@ -104,6 +105,9 @@ func checkBiliData(r *gjson.Result) (data *gjson.Result, code int, msg string) {
 		return nil, code, msg
 	}
 	d := r.Get("data")
+	if !d.Exists() {
+		return nil, 400, "没有data字段"
+	}
 	return &d, 0, ""
 }
 
@@ -159,9 +163,9 @@ func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					continue
 				}
 				//当前开播状态和已经记录的开播状态相同，说明已经发送过消息
-				if info.Code == 0 && info.LiveStatus == b.living[info.Mid] {
+				if info.Code == 0 && info.LiveStatus == b.living[id] {
 					logger.WithFields(logrus.Fields{
-						"id":     info.Mid,
+						"mid":    info.Mid,
 						"living": info.LiveStatus,
 					}).Debug("开播状态未改变")
 					info.Reset()
@@ -182,24 +186,23 @@ func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					msg.Title = "获取直播间状态失败"
 					msg.Text = fmt.Sprintf("[error] %s, code=%d", info.Msg, info.Code)
 				} else {
+					b.living[id] = info.LiveStatus
 					if info.LiveStatus {
 						//开播
-						b.living[info.Mid] = true
 						msg.Title = "开播了"
 						msg.Text = fmt.Sprintf("标题：\"%s\"", info.Title)
 						msg.Img = []string{info.Cover}
 						msg.Src = fmt.Sprintf("%s%d", liveUrlPrefix, info.RoomId)
 						logger.WithFields(logrus.Fields{
-							"id":   id,
+							"mid":  id,
 							"name": info.Uname,
 						}).Debug("b站直播间开播")
 					} else {
 						//下播
-						b.living[info.Mid] = false
 						msg.Title = "下播了"
 						msg.Text = "😭😭😭"
 						logger.WithFields(logrus.Fields{
-							"id":   id,
+							"mid":  id,
 							"name": info.Uname,
 						}).Debug("b站直播间下播")
 					}
@@ -207,6 +210,7 @@ func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 				ch <- msg
 				info.Reset()
 				liveInfoPool.Put(info)
+				time.Sleep(waitInterval)
 			}
 		}
 	}
@@ -300,6 +304,7 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					info.Reset()
 					dynInfoPool.Put(info)
 				}
+				time.Sleep(waitInterval)
 			}
 		}
 	}
