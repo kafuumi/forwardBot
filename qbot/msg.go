@@ -48,7 +48,7 @@ func parseCQBotMsg(src []byte) *CQBotMsg {
 			msg := &EchoMsg{}
 			err := easyjson.Unmarshal(src, msg)
 			if err != nil {
-				//TODO
+				logger.WithField("err", err).Error("解析的消息非json格式")
 			}
 			go hm.Handle(msg)
 		}

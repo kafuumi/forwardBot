@@ -1,4 +1,5 @@
 msgBuf: 10
+logLevel: "Debug"
 
 bili:
   live:

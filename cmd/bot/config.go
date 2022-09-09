@@ -30,6 +30,7 @@ type CQBotCfg struct {
 
 type Config struct {
 	MsgBuf   int         `yaml:"msgBuf"`
+	LogLevel string      `yaml:"logLevel"`
 	Bili     BiliCfg     `yaml:"bili"`
 	Tiktok   TiktokCfg   `yaml:"tiktok"`
 	DingTalk DingTalkCfg `yaml:"dingTalk,omitempty"`

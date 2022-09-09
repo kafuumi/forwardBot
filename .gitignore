@@ -92,3 +92,4 @@ fabric.properties
 cmd/bot/config_ignore.yaml
 cmd/bot/bot
 cmd/test/
+*.log

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"forwardBot/req"
+	"github.com/sirupsen/logrus"
 
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
@@ -16,6 +17,14 @@ const (
 const (
 	EchoSendGuildMsg = "SendGuildChannelMsgEcho"
 )
+
+var (
+	logger = logrus.New()
+)
+
+func SetLogger(l *logrus.Logger) {
+	logger = l
+}
 
 // CQBot 使用go-CQHttp实现的机器人
 type CQBot struct {
@@ -65,14 +74,16 @@ func (c *CQBot) ListenMsg(ctx context.Context, ch chan<- *CQBotMsg) {
 		default:
 			msgType, data, err = c.conn.ReadMessage()
 			if err != nil {
-
+				logger.WithField("err", err).Error("读取websocket消息失败")
+				continue
 			}
 			if msgType != websocket.TextMessage {
-
+				logger.WithField("type", msgType).Warn("读取到非文本的websocket消息")
+				continue
 			}
 			msg := parseCQBotMsg(data)
 			if msg == nil {
-
+				logger.Debug("解析的消息为nil")
 			} else {
 				ch <- msg
 			}

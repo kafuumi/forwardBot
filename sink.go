@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"forwardBot/push"
 	"forwardBot/qbot"
+	"github.com/sirupsen/logrus"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,9 +25,11 @@ func NewPushSink(p push.Pusher) *PushSink {
 }
 
 func (p *PushSink) Receive(msg *push.Msg) error {
+	logger.Info("PushSink 推送消息")
 	return p.pusher.PushMsg(msg)
 }
 
+// TODO 完善指令
 const (
 	CQBotCmdHelp             = "/啵啵"
 	CQBotCmdBiliLive         = "/b站开播"
@@ -47,9 +50,23 @@ type CQBotSink struct {
 }
 
 func NewCQBotSink(host, token string, bufSize int) *CQBotSink {
+	logger.WithFields(logrus.Fields{
+		"host":    host,
+		"token":   token,
+		"bufSize": bufSize,
+	}).Info("创建CQBot")
 	qbot.SetHandler(qbot.EchoSendGuildMsg, func(msg *qbot.EchoMsg) bool {
 		if msg.RetCode == 2 {
-			fmt.Println(msg.Wording)
+			logger.WithFields(logrus.Fields{
+				"code":    msg.RetCode,
+				"status":  msg.Status,
+				"wording": msg.Wording,
+			}).Warn("频道发送消息失败")
+		} else {
+			logger.WithFields(logrus.Fields{
+				"code":   msg.RetCode,
+				"status": msg.Status,
+			}).Info("频道中发送消息成功")
 		}
 		return true
 	})
@@ -62,6 +79,7 @@ func NewCQBotSink(host, token string, bufSize int) *CQBotSink {
 }
 
 func (c *CQBotSink) Receive(msg *push.Msg) error {
+	logger.Debug("CQBot发送消息")
 	if len(c.table) == 0 {
 		return nil
 	}
@@ -90,34 +108,45 @@ func (c *CQBotSink) Receive(msg *push.Msg) error {
 	for gId, cId := range c.table {
 		cFlag, flag := c.flag[gId], msg.Flag
 		if cFlag&flag == 0 {
+			logger.WithFields(logrus.Fields{
+				"guildId":   gId,
+				"channelId": cId,
+				"flag":      flag,
+			}).Debug("当前频道未订阅该消息")
 			continue
 		}
 		err = c.bot.SendGuildMsg(gId, cId, msgContent)
 		if err != nil {
-			//TODO
-			fmt.Println(err)
+			logger.WithFields(logrus.Fields{
+				"guildId":   gId,
+				"channelId": cId,
+				"err":       err,
+			}).Error("发送频道消息失败")
 		}
 	}
 	return nil
 }
 
 func (c *CQBotSink) Listen(ctx context.Context) error {
+	logger.Info("CQBot监听消息")
 	err := c.bot.Connect(ctx)
 	if err != nil {
 		return err
 	}
 	ch := make(chan *qbot.CQBotMsg, c.bufSize)
 	go c.bot.ListenMsg(ctx, ch)
+	//心跳包检测
 	go func() {
 		ticker := time.NewTicker(20 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
+				logger.Debug("CQBot停止心跳包检测")
 				return
 			case now := <-ticker.C:
 				if now.Unix()-c.heartbeat > 20 {
-					fmt.Println("heart error")
+					logger.Warn("CQBot超过20秒未收到心跳包")
 				}
 			}
 		}
@@ -127,21 +156,31 @@ func (c *CQBotSink) Listen(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			c.bot.DisConnect()
+			logger.Info("CQBot停止")
 			return nil
 		case msg := <-ch:
 			if msg.MsgType == qbot.CQBotHeartMsg {
 				c.heartbeat = msg.Times
+				logger.Debug("CQBot收到心跳包")
 				continue
 			}
 			if msg.MsgType != qbot.CQBotGuildMsg {
+				logger.Info("CQBot收到非频道消息")
 				continue
 			}
 			cmd := qbot.ParseCQBotCmd(msg.Text)
 			//不是指令
 			if cmd == nil {
+				logger.WithField("text", msg.Text).Debug("解析指令失败")
 				continue
 			}
 			gId, cId := msg.SourceId, msg.SubSourceId
+			logger.WithFields(logrus.Fields{
+				"guildId":   gId,
+				"channelId": cId,
+				"cmd":       cmd.Cmd,
+				"params":    cmd.Params,
+			}).Info("接收到指令")
 			switch cmd.Cmd {
 			case CQBotCmdHelp:
 				at := &qbot.CQCode{
@@ -167,6 +206,8 @@ func (c *CQBotSink) Listen(ctx context.Context) error {
 				c.Unsubscribe(gId, cId, BiliLiveMsg)
 			case CQBotCmdBiliDynCancel:
 				c.Unsubscribe(gId, cId, BiliDynMsg)
+			default:
+				logger.WithField("cmd", cmd.Cmd).Info("不支持的指令")
 			}
 		}
 	}

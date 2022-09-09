@@ -7,6 +7,7 @@ import (
 	"forwardBot/push"
 	"forwardBot/req"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"strconv"
 	"sync"
 	"time"
@@ -79,6 +80,9 @@ func (l *LiveInfo) Reset() {
 }
 
 func NewBiliLiveSource(uid []int64) *BiliLiveSource {
+	logger.WithFields(logrus.Fields{
+		"uid": uid,
+	}).Info("监控b站开播状态")
 	return &BiliLiveSource{
 		uid:    append([]int64{}, uid...),
 		living: make(map[int64]bool),
@@ -142,26 +146,39 @@ func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Info("停止监控b站直播间")
 			return
 		case now := <-ticker.C:
 			for _, id := range b.uid {
 				info, err := getInfo(id)
 				if err != nil {
-					//TODO
-					fmt.Println(err)
+					logger.WithFields(logrus.Fields{
+						"uid": id,
+						"err": err,
+					}).Error("获取开播状态失败")
 					continue
 				}
 				//当前开播状态和已经记录的开播状态相同，说明已经发送过消息
-				if info.LiveStatus == b.living[info.Mid] {
+				if info.Code == 0 && info.LiveStatus == b.living[info.Mid] {
+					logger.WithFields(logrus.Fields{
+						"id":     info.Mid,
+						"living": info.LiveStatus,
+					}).Debug("开播状态未改变")
 					info.Reset()
 					liveInfoPool.Put(info)
 					continue
 				}
 				msg := &push.Msg{
 					Times:  now,
+					Flag:   BiliLiveMsg,
 					Author: info.Uname,
 				}
 				if info.Code != 0 {
+					logger.WithFields(logrus.Fields{
+						"id":   id,
+						"code": info.Code,
+						"msg":  info.Msg,
+					}).Warn("获取开播状态失败")
 					msg.Title = "获取直播间状态失败"
 					msg.Text = fmt.Sprintf("[error] %s, code=%d", info.Msg, info.Code)
 				} else {
@@ -172,18 +189,24 @@ func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 						msg.Text = fmt.Sprintf("标题：\"%s\"", info.Title)
 						msg.Img = []string{info.Cover}
 						msg.Src = fmt.Sprintf("%s%d", liveUrlPrefix, info.RoomId)
+						logger.WithFields(logrus.Fields{
+							"id":   id,
+							"name": info.Uname,
+						}).Debug("b站直播间开播")
 					} else {
 						//下播
 						b.living[info.Mid] = false
 						msg.Title = "下播了"
 						msg.Text = "😭😭😭"
+						logger.WithFields(logrus.Fields{
+							"id":   id,
+							"name": info.Uname,
+						}).Debug("b站直播间下播")
 					}
 				}
 				ch <- msg
 				info.Reset()
 				liveInfoPool.Put(info)
-				msg.Flag = BiliLiveMsg
-				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}
@@ -224,6 +247,9 @@ func (d *DynamicInfo) Reset() {
 }
 
 func NewBiliDynamicSource(uid []int64) *BiliDynamicSource {
+	logger.WithFields(logrus.Fields{
+		"uid": uid,
+	}).Info("监控b站动态更新")
 	return &BiliDynamicSource{
 		uid: uid,
 	}
@@ -235,17 +261,32 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Info("停止b站动态监控")
 			return
 		case now := <-ticker.C:
 			for _, id := range b.uid {
 				infos, err := space(id, now)
 				if err != nil {
-					//TODO
-					fmt.Println(err)
+					logger.WithFields(logrus.Fields{
+						"id":  id,
+						"err": err,
+					}).Error("获取b站动态失败")
 					continue
 				}
+				if len(infos) == 0 {
+					logger.WithFields(logrus.Fields{
+						"id": id,
+					}).Debug("无新动态")
+				}
 				for _, info := range infos {
+					logger.WithFields(logrus.Fields{
+						"id":    id,
+						"name":  info.author,
+						"title": info.types,
+						"src":   info.src,
+					}).Debug("更新动态")
 					msg := &push.Msg{
+						Flag:   BiliDynMsg,
 						Times:  info.times,
 						Author: info.author,
 						Title:  info.types,
@@ -256,9 +297,7 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					ch <- msg
 					info.Reset()
 					dynInfoPool.Put(info)
-					msg.Flag = BiliDynMsg
 				}
-				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}
@@ -291,9 +330,17 @@ func space(id int64, now time.Time) (infos []*DynamicInfo, err error) {
 			if now.Sub(info.times) <= interval {
 				infos = append(infos, info)
 			} else {
+				logger.WithFields(logrus.Fields{
+					"id":  id,
+					"src": info.src,
+				}).Debug("过滤动态")
 				info.Reset()
 				dynInfoPool.Put(info)
 			}
+		} else {
+			logger.WithFields(logrus.Fields{
+				"id": id,
+			}).Warn("解析的动态为nil")
 		}
 	}
 	return infos, nil

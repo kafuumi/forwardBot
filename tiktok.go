@@ -7,6 +7,7 @@ import (
 	"forwardBot/push"
 	"forwardBot/req"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"net/url"
 	"time"
@@ -26,6 +27,9 @@ type TiktokLiveSource struct {
 }
 
 func NewTiktokLiveSource(nonce, signature string, users []string) *TiktokLiveSource {
+	logger.WithFields(logrus.Fields{
+		"users": users,
+	}).Info("监控抖音直播间开播状态")
 	ts := new(TiktokLiveSource)
 	ts.client = req.New(10)
 	ts.client.SetCookies("__ac_nonce", nonce)
@@ -42,16 +46,23 @@ func (t *TiktokLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 	for {
 		select {
 		case <-ctx.Done():
+			logger.Info("停止监控抖音直播间")
 			return
 		case now := <-ticker.C:
 			for _, id := range t.users {
 				info, err := t.getLiveInfo(id)
 				if err != nil {
-					//TODO
-					fmt.Println(err)
+					logger.WithFields(logrus.Fields{
+						"id":  id,
+						"err": err,
+					}).Error("获取抖音开播状态失败")
 					continue
 				}
 				if info.LiveStatus == t.living[id] {
+					logger.WithFields(logrus.Fields{
+						"id":     id,
+						"living": info.LiveStatus,
+					}).Debug("开播状态未改变")
 					info.Reset()
 					liveInfoPool.Put(info)
 					continue
@@ -64,12 +75,20 @@ func (t *TiktokLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 				}
 				if info.LiveStatus {
 					//开播
+					logger.WithFields(logrus.Fields{
+						"id":   id,
+						"name": info.Uname,
+					}).Info("抖音开播了")
 					msg.Title = "抖音开播了"
 					msg.Text = fmt.Sprintf("标题：\"%s\"", info.Title)
 					msg.Img = []string{info.Cover}
 					msg.Src = fmt.Sprintf("%s%s", tiktokLiveShareUrl, info.RoomIdStr)
 				} else {
 					//下播
+					logger.WithFields(logrus.Fields{
+						"id":   id,
+						"name": info.Uname,
+					}).Info("抖音下播了")
 					msg.Title = "抖音下播了"
 					msg.Text = "😭😭😭"
 				}
@@ -90,12 +109,12 @@ func (t *TiktokLiveSource) getLiveInfo(id string) (info *LiveInfo, err error) {
 	var start, end int
 	start = bytes.Index(b, []byte(startFlag))
 	if start < 0 {
-		return nil, errors.New("get info fail, signature maybe error")
+		return nil, errors.New("get info fail(start < 0), signature maybe error")
 	}
 	b = b[start+len(startFlag):]
 	end = bytes.Index(b, []byte(endFlag))
 	if end < 0 {
-		return nil, errors.New("get info fail, signature maybe error")
+		return nil, errors.New("get info fail(end < 0), signature maybe error")
 	}
 	b = b[:end]
 	jsonStr, err := url.QueryUnescape(string(b))

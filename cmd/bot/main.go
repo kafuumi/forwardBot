@@ -1,30 +1,50 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"forwardBot"
 	"forwardBot/push"
+	"github.com/sirupsen/logrus"
+	"io"
 	"os"
 	"os/signal"
 	"path"
+	"runtime"
+	"time"
+)
+
+const (
+	Version = "bot: v0.1.1"
 )
 
 var (
-	cfg *Config
+	cfg    *Config
+	logger *logrus.Logger
 )
 
 func main() {
-	cfgFile, err := os.Open(path.Dir(os.Args[0]) + "/config_ignore.yaml")
+	fmt.Println("Version: ", Version)
+	cfgFile, err := os.Open(path.Dir(os.Args[0]) + "/config.yaml")
 	if err != nil {
-		fmt.Printf("打开配置文件失败：%v\n", err)
+		fmt.Printf("[Error] 打开配置文件失败：%v\n", err)
 		panic(err)
 	}
 	cfg, err = ReadCfg(cfgFile)
 	if err != nil {
-		fmt.Printf("读取配置文件失败：%v\n", err)
+		fmt.Printf("[Error] 读取配置文件失败：%v\n", err)
 		panic(err)
 	}
+
+	logFile, err := os.Create(fmt.Sprintf("%s.log", time.Now().Format("200601021504")))
+	if err != nil {
+		fmt.Printf("[Error] 创建日志文件失败：%v\n", err)
+		panic(err)
+	}
+	logWriter := bufio.NewWriter(logFile)
+	SetUpLogger(os.Stdout, logWriter)
+	forwardBot.SetLogger(logger)
 	bot := forwardBot.NewBot(cfg.MsgBuf)
 	bot.AppendSource(
 		BiliLiveSource(),
@@ -36,7 +56,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	var cqBot *forwardBot.CQBotSink
 	if cfg.CQBot.Host == "" {
-		fmt.Println("不推送消息至qq")
+		logger.Warn("未配置CQBot, 不推送消息至QQ")
 	} else {
 		cqBot = forwardBot.NewCQBotSink(cfg.CQBot.Host, cfg.CQBot.Token, cfg.CQBot.BufSize)
 		bot.AppendSink(cqBot)
@@ -46,7 +66,7 @@ func main() {
 		if cqBot != nil {
 			err := cqBot.Listen(ctx)
 			if err != nil {
-				fmt.Println(err)
+				logger.WithField("err", err).Error("CQBot出现错误")
 			}
 		}
 	}()
@@ -55,13 +75,51 @@ func main() {
 	exits := make(chan os.Signal)
 	signal.Notify(exits, os.Interrupt, os.Kill)
 	<-exits
-	fmt.Println("断开连接")
 	cancel()
+	_ = logWriter.Flush()
+	_ = logFile.Close()
+	logger.Info("程序退出")
+}
+
+func SetUpLogger(writers ...io.Writer) {
+	//设置日志
+	formatter := &logrus.TextFormatter{
+		DisableColors:    true,
+		TimestampFormat:  "01-02 15:04:05",
+		QuoteEmptyFields: true,
+		CallerPrettyfier: func(f *runtime.Frame) (function string, file string) {
+			filename := path.Base(f.File)
+			return fmt.Sprintf("%s()", f.Function), fmt.Sprintf("%s:%d", filename, f.Line)
+
+		},
+	}
+	logLevel := logrus.DebugLevel
+	switch cfg.LogLevel {
+	case "Trace":
+		logLevel = logrus.TraceLevel
+	case "Debug":
+		logLevel = logrus.DebugLevel
+	case "Info":
+		logLevel = logrus.InfoLevel
+	case "Warn":
+		logLevel = logrus.WarnLevel
+	case "Error":
+		logLevel = logrus.ErrorLevel
+	case "Fatal":
+		logLevel = logrus.FatalLevel
+	case "Panic":
+		logLevel = logrus.PanicLevel
+	}
+	logger = logrus.New()
+	logger.SetLevel(logLevel)
+	logger.SetFormatter(formatter)
+	logger.SetReportCaller(true)
+	logger.SetOutput(io.MultiWriter(writers...))
 }
 
 func BiliLiveSource() forwardBot.Source {
 	if len(cfg.Bili.Live) == 0 {
-		fmt.Println("不监控b站直播")
+		logger.Warn("不监控B站开播状态")
 		return nil
 	}
 	return forwardBot.NewBiliLiveSource(cfg.Bili.Live)
@@ -69,7 +127,7 @@ func BiliLiveSource() forwardBot.Source {
 
 func BiliDynamicSource() forwardBot.Source {
 	if len(cfg.Bili.Dynamic) == 0 {
-		fmt.Println("不监控b站动态")
+		logger.Warn("不监控B站动态")
 		return nil
 	}
 	return forwardBot.NewBiliDynamicSource(cfg.Bili.Dynamic)
@@ -77,7 +135,7 @@ func BiliDynamicSource() forwardBot.Source {
 
 func TikTokLiveSource() forwardBot.Source {
 	if len(cfg.Tiktok.Users) == 0 {
-		fmt.Println("不监控抖音直播间")
+		logger.Warn("不监控抖音开播状态")
 		return nil
 	}
 	return forwardBot.NewTiktokLiveSource(cfg.Tiktok.Nonce, cfg.Tiktok.Signature, cfg.Tiktok.Users)
@@ -85,7 +143,7 @@ func TikTokLiveSource() forwardBot.Source {
 
 func DingTalkSink() forwardBot.Sink {
 	if cfg.DingTalk.Webhook == "" {
-		fmt.Println("不推送消息至钉钉")
+		logger.Warn("未配置钉钉，不推送消息")
 		return nil
 	}
 	return forwardBot.NewPushSink(push.NewDingTalk(cfg.DingTalk.Webhook, cfg.DingTalk.Secret))
