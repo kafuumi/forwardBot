@@ -48,7 +48,7 @@ const (
 	CQBotCmdTiktokLiveCancel = "/取消抖音开播"
 	CQBotCmdPushTest         = "/推送测试"
 )
-const AllMsyNum = 3
+const AllMsgNum = 3
 
 type CQBotSink struct {
 	bot       *qbot.CQBot
@@ -237,6 +237,14 @@ func (c *CQBotSink) Listen(ctx context.Context) error {
 				c.Unsubscribe(gId, cId, BiliLiveMsg)
 			case CQBotCmdBiliDynCancel:
 				c.Unsubscribe(gId, cId, BiliDynMsg)
+			case CQBotCmdPushTest:
+				if testSource.running {
+					testType := 0
+					if len(cmd.Params) == 1 && len(cmd.Params[0]) != 0 {
+						testType = int(cmd.Params[0][0]) - '0'
+					}
+					go testSource.Test(testType)
+				}
 			default:
 				logger.WithField("cmd", cmd.Cmd).Info("不支持的指令")
 			}
@@ -251,7 +259,7 @@ func (c *CQBotSink) SubscribeAll(gId, cId uint64) {
 	cIds := c.table[gId]
 	var err error
 	if len(cIds) == 0 {
-		cIds = make([]uint64, AllMsyNum)
+		cIds = make([]uint64, AllMsgNum)
 	}
 	//当前频道是否已经订阅
 	ok := true
@@ -301,7 +309,7 @@ func (c *CQBotSink) Subscribe(gId, cId uint64, mask int) {
 
 	cIds := c.table[gId]
 	if len(cIds) == 0 {
-		cIds = make([]uint64, AllMsyNum)
+		cIds = make([]uint64, AllMsgNum)
 	}
 	var err error
 	if cIds[mask] == cId {

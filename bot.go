@@ -84,3 +84,8 @@ func (b *Bot) Run(ctx context.Context) {
 		}
 	}
 }
+
+// EnableTestSource 启用推送测试的source，必须在 Run方法之前调用
+func (b *Bot) EnableTestSource() {
+	b.AppendSource(testSource)
+}

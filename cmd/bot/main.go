@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	Version = "bot: v0.1.2"
+	Version = "bot: v0.1.3"
 )
 
 var (
@@ -51,6 +51,7 @@ func main() {
 		BiliDynamicSource(),
 		TikTokLiveSource(),
 	)
+	bot.EnableTestSource()
 	bot.AppendSink(DingTalkSink())
 
 	ctx, cancel := context.WithCancel(context.Background())
