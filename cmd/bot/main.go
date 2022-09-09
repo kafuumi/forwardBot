@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	Version = "bot: v0.1.3"
+	Version = "bot: v0.1.4"
 )
 
 var (
@@ -32,6 +32,7 @@ func main() {
 		panic(err)
 	}
 	cfg, err = ReadCfg(cfgFile)
+	_ = cfgFile.Close()
 	if err != nil {
 		fmt.Printf("[Error] 读取配置文件失败：%v\n", err)
 		panic(err)
@@ -77,9 +78,9 @@ func main() {
 	signal.Notify(exits, os.Interrupt, os.Kill)
 	<-exits
 	cancel()
+	logger.Info("程序退出")
 	_ = logWriter.Flush()
 	_ = logFile.Close()
-	logger.Info("程序退出")
 }
 
 func SetUpLogger(writers ...io.Writer) {

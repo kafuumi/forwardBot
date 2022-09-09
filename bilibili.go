@@ -23,7 +23,7 @@ const (
 	videoUrlPrefix   = "https://www.bilibili.com/video/"
 	articleUrlPrefix = "https://www.bilibili.com/read/cv"
 	musicUrlPrefix   = "https://www.bilibili.com/audio/au"
-	interval         = time.Duration(30) * time.Second
+	interval         = time.Duration(10) * time.Second
 )
 
 var (
@@ -224,7 +224,8 @@ const (
 )
 
 type BiliDynamicSource struct {
-	uid []int64
+	uid       []int64
+	lastTable map[int64]int64
 }
 
 type DynamicInfo struct {
@@ -251,7 +252,8 @@ func NewBiliDynamicSource(uid []int64) *BiliDynamicSource {
 		"uid": uid,
 	}).Info("监控b站动态更新")
 	return &BiliDynamicSource{
-		uid: uid,
+		uid:       uid,
+		lastTable: make(map[int64]int64),
 	}
 }
 
@@ -265,7 +267,7 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 			return
 		case now := <-ticker.C:
 			for _, id := range b.uid {
-				infos, err := space(id, now)
+				infos, err := b.space(id, now)
 				if err != nil {
 					logger.WithFields(logrus.Fields{
 						"id":  id,
@@ -303,7 +305,8 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 	}
 }
 
-func space(id int64, now time.Time) (infos []*DynamicInfo, err error) {
+// 获取动态
+func (b *BiliDynamicSource) space(id int64, now time.Time) (infos []*DynamicInfo, err error) {
 	resp, err := req.Get(spaceUrl, req.D{
 		{"offset", ""},
 		{"host_mid", id},
@@ -324,14 +327,29 @@ func space(id int64, now time.Time) (infos []*DynamicInfo, err error) {
 	items := data.Get("items").Array()
 
 	infos = make([]*DynamicInfo, 0, len(items))
+	var newest int64
+	last := b.lastTable[id]
+	if last == 0 {
+		last = now.Unix() - int64(interval/time.Second)
+	}
 	for _, item := range items {
 		info := parseDynamic(&item)
 		if info != nil {
-			if now.Sub(info.times) <= interval {
+			if info.types == DynamicTypeLive {
+				logger.WithFields(logrus.Fields{
+					"mid":    id,
+					"author": info.author,
+					"types":  info.types,
+				}).Debug("忽略开播动态")
+				continue
+			}
+			second := info.times.Unix()
+			newest = max(newest, second)
+			if second > last {
 				infos = append(infos, info)
 			} else {
 				logger.WithFields(logrus.Fields{
-					"id":  id,
+					"mid": id,
 					"src": info.src,
 				}).Debug("过滤动态")
 				info.Reset()
@@ -343,7 +361,16 @@ func space(id int64, now time.Time) (infos []*DynamicInfo, err error) {
 			}).Warn("解析的动态为nil")
 		}
 	}
+	last = max(last, newest)
+	b.lastTable[id] = last
 	return infos, nil
+}
+
+func max[T int64 | int | int32 | int8 | int16](a, b T) T {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func parseDynamic(item *gjson.Result) *DynamicInfo {
@@ -387,7 +414,12 @@ func parseDynamic(item *gjson.Result) *DynamicInfo {
 		if origInfo == nil {
 			return nil
 		}
-		info.text = fmt.Sprintf("%s \n转发自：@%s\n%s", text, origInfo.author, origInfo.text)
+		if origInfo.types == DynamicTypeLive {
+			info.types = "分享直播间"
+			info.text = fmt.Sprintf("%s\n分享\"%s\"的直播间\n%s", text, origInfo.author, origInfo.text)
+		} else {
+			info.text = fmt.Sprintf("%s \n转发自：@%s\n%s", text, origInfo.author, origInfo.text)
+		}
 		info.img = origInfo.img
 	case DynamicTypeArticle:
 		info.types = "投稿专栏"
@@ -397,23 +429,27 @@ func parseDynamic(item *gjson.Result) *DynamicInfo {
 		desc := article.Get("desc").String()
 		title := article.Get("title").String()
 		info.text = fmt.Sprintf("%s\n%s", title, desc)
-		cover := article.Get("covers.0").String()
-		info.img = []string{cover}
+		info.img = []string{article.Get("covers.0").String()}
 	case DynamicTypeMusic:
 		info.types = "投稿音频"
 		music := dynamic.Get("major.music")
 		info.id = strconv.FormatInt(music.Get("id").Int(), 10)
 		info.src = musicUrlPrefix + info.id
 		info.text = music.Get("title").String()
-		cover := music.Get("cover").String()
-		info.img = []string{cover}
+		info.img = []string{music.Get("cover").String()}
 	case DynamicTypePGC:
 		pgc := dynamic.Get("major.pgc")
 		info.text = pgc.Get("title").String()
 		info.img = []string{pgc.Get("cover").String()}
 	case DynamicTypeLive:
-		//不处理开播动态
-		return nil
+		info.types = DynamicTypeLive
+		content := dynamic.Get("major.live_rcmd.content").String()
+		if content == "" {
+			return nil
+		}
+		liveInfo := gjson.Get(content, "live_play_info")
+		info.text = fmt.Sprintf("标题：\"%s\"", liveInfo.Get("title").String())
+		info.img = []string{liveInfo.Get("cover").String()}
 	default:
 		info.types = "发布动态"
 		info.text = "未处理的动态类型"
