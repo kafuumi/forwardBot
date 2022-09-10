@@ -17,6 +17,8 @@ type Sink interface {
 	Receive(msg *push.Msg) error
 }
 
+var _ Sink = (*PushSink)(nil)
+
 type PushSink struct {
 	pusher push.Pusher
 }
@@ -49,6 +51,8 @@ const (
 	CQBotCmdPushTest         = "/推送测试"
 )
 const AllMsgNum = 3
+
+var _ Sink = (*CQBotSink)(nil)
 
 type CQBotSink struct {
 	bot       *qbot.CQBot

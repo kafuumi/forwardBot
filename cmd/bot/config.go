@@ -7,7 +7,7 @@ import (
 )
 
 type BiliCfg struct {
-	Live    []int64 `yaml:"live"`
+	Live    []int   `yaml:"live"`
 	Dynamic []int64 `yaml:"dynamic"`
 }
 

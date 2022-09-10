@@ -20,6 +20,8 @@ const (
 	tiktokLiveShareUrl = "https://webcast.amemv.com/douyin/webcast/reflow/"
 )
 
+var _ Source = (*TiktokLiveSource)(nil)
+
 type TiktokLiveSource struct {
 	client *req.C
 	living map[string]bool
@@ -29,7 +31,7 @@ type TiktokLiveSource struct {
 func NewTiktokLiveSource(nonce, signature string, users []string) *TiktokLiveSource {
 	logger.WithFields(logrus.Fields{
 		"users": users,
-	}).Info("监控抖音直播间开播状态")
+	}).Info("[tiktok]监控抖音直播间开播状态")
 	ts := new(TiktokLiveSource)
 	ts.client = req.New(10)
 	ts.client.SetCookies("__ac_nonce", nonce)
@@ -46,7 +48,7 @@ func (t *TiktokLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("停止监控抖音直播间")
+			logger.Info("[tiktok]停止监控抖音直播间")
 			return
 		case now := <-ticker.C:
 			for _, id := range t.users {
@@ -55,14 +57,14 @@ func (t *TiktokLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					logger.WithFields(logrus.Fields{
 						"id":  id,
 						"err": err,
-					}).Error("获取抖音开播状态失败")
+					}).Error("[tiktok]获取抖音开播状态失败")
 					continue
 				}
 				if info.LiveStatus == t.living[id] {
 					logger.WithFields(logrus.Fields{
 						"id":     id,
 						"living": info.LiveStatus,
-					}).Debug("开播状态未改变")
+					}).Debug("[tiktok]开播状态未改变")
 					info.Reset()
 					liveInfoPool.Put(info)
 					continue
@@ -78,7 +80,7 @@ func (t *TiktokLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					logger.WithFields(logrus.Fields{
 						"id":   id,
 						"name": info.Uname,
-					}).Debug("抖音开播了")
+					}).Debug("[tiktok]抖音开播了")
 					msg.Title = "抖音开播了"
 					msg.Text = fmt.Sprintf("标题：\"%s\"", info.Title)
 					msg.Img = []string{info.Cover}
@@ -88,13 +90,14 @@ func (t *TiktokLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					logger.WithFields(logrus.Fields{
 						"id":   id,
 						"name": info.Uname,
-					}).Debug("抖音下播了")
+					}).Debug("[tiktok]抖音下播了")
 					msg.Title = "抖音下播了"
 					msg.Text = "😭😭😭"
 				}
 				ch <- msg
 				info.Reset()
 				liveInfoPool.Put(info)
+				time.Sleep(waitInterval)
 			}
 		}
 	}
@@ -123,12 +126,38 @@ func (t *TiktokLiveSource) getLiveInfo(id string) (info *LiveInfo, err error) {
 	}
 	roomInfo := gjson.Get(jsonStr, "app.initialState.roomStore.roomInfo")
 	if !roomInfo.Exists() {
+		logger.WithFields(logrus.Fields{
+			"mid":  id,
+			"resp": jsonStr,
+		}).Error("[tiktok]获取roomInfo失败")
 		return nil, errors.New("not exists roomInfo object")
 	}
 	room := roomInfo.Get("room")
+	if !room.Exists() {
+		logger.WithFields(logrus.Fields{
+			"mid":  id,
+			"resp": roomInfo.String(),
+		}).Error("[tiktok]获取roomInfo.room失败")
+		return nil, errors.New("not exists room object")
+	}
 	anchor := roomInfo.Get("anchor")
+	if !anchor.Exists() {
+		logger.WithFields(logrus.Fields{
+			"mid":  id,
+			"resp": roomInfo.String(),
+		}).Error("[tiktok]获取roomInfo.anchor失败")
+		return nil, errors.New("not exists room object")
+	}
+	status := room.Get("status")
+	if !status.Exists() {
+		logger.WithFields(logrus.Fields{
+			"mid":  id,
+			"resp": room.String(),
+		}).Error("[tiktok]获取room.status失败")
+		return nil, errors.New("not exists room.status")
+	}
 	//2为开播
-	isLiving := room.Get("status").Int() == 2
+	isLiving := status.Int() == 2
 	info = liveInfoPool.Get().(*LiveInfo)
 	info.MidStr = anchor.Get("id_str").String()
 	info.Uname = anchor.Get("nickname").String()

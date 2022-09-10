@@ -15,6 +15,8 @@ type Source interface {
 
 var testSource = &CustomSource{ch: make(chan *push.Msg, 10)}
 
+var _ Source = (*CustomSource)(nil)
+
 // CustomSource 自定义source，用于测试推送系统
 type CustomSource struct {
 	ch      chan *push.Msg

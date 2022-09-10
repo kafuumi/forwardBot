@@ -2,14 +2,16 @@ msgBuf: 16 #消息缓冲区大小
 logLevel: "Debug" #日志级别：Trace,Debug,Info,Warn,Error
 
 bili:
-  # b站开播提醒，内容为用户的b站uid
+  # roomId，房间号
   live:
-    - 672342685
-  # b站动态更新提醒
-  dynamic:
-    - 703007996
+    - 22625027
+    - 22632424
 
-# 抖音开播提醒
+  # uid
+  dynamic:
+    - 672342685
+    - 672353429
+
 tiktok:
   # 网页端cookies 中的 “__ac_nonce”
   nonce: ""
@@ -19,12 +21,10 @@ tiktok:
   users:
     - "804284713107"
 
-# 推送到钉钉群机器人
 dingTalk:
   webhook: ""
   secret: ""
 
-# 通过cqhttp推送到qq频道
 cqBot:
   host: ""
   token: ""

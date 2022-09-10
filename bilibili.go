@@ -17,6 +17,7 @@ import (
 
 const (
 	infoUrl          = "https://api.bilibili.com/x/space/acc/info"
+	roomInfoUrl      = "https://api.live.bilibili.com/xlive/web-room/v1/index/getInfoByRoom"
 	liveUrlPrefix    = "https://live.bilibili.com/"
 	spaceUrl         = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
 	dynamicUrlPrefix = "https://t.bilibili.com/"
@@ -43,20 +44,16 @@ var (
 	}
 )
 
+var _ Source = (*BiliLiveSource)(nil)
+
 // BiliLiveSource 获取b站直播间是否开播状态
 type BiliLiveSource struct {
-	uid    []int64
-	living map[int64]bool
-}
-
-type BaseInfo struct {
-	Code int
-	Msg  string
+	room   []int
+	living map[int]bool
 }
 
 // LiveInfo 直播间信息
 type LiveInfo struct {
-	BaseInfo
 	Mid        int64  //uid
 	MidStr     string //字符串形式的uid，抖音的uid和房间号id较长，可能会超范围，作为扩展用，b站返回的数据中为空字符串
 	Uname      string //昵称
@@ -64,12 +61,11 @@ type LiveInfo struct {
 	RoomId     int    //房间号
 	RoomIdStr  string
 	Title      string //房间标题
+	Area       string //直播间分区
 	Cover      string //封面
 }
 
 func (l *LiveInfo) Reset() {
-	l.Code = 0
-	l.Msg = ""
 	l.Mid = 0
 	l.MidStr = ""
 	l.Uname = ""
@@ -80,13 +76,13 @@ func (l *LiveInfo) Reset() {
 	l.Cover = ""
 }
 
-func NewBiliLiveSource(uid []int64) *BiliLiveSource {
+func NewBiliLiveSource(room []int) *BiliLiveSource {
 	logger.WithFields(logrus.Fields{
-		"uid": uid,
-	}).Info("监控b站开播状态")
+		"room": room,
+	}).Info("[BiliLive]监控b站开播状态")
 	return &BiliLiveSource{
-		uid:    append([]int64{}, uid...),
-		living: make(map[int64]bool),
+		room:   append([]int{}, room...),
+		living: make(map[int]bool),
 	}
 }
 
@@ -111,37 +107,129 @@ func checkBiliData(r *gjson.Result) (data *gjson.Result, code int, msg string) {
 	return &d, 0, ""
 }
 
-// 获取用户信息
-func getInfo(mid int64) (info *LiveInfo, err error) {
-	body, err := req.Get(infoUrl, req.D{{"mid", mid}})
+// 获取直播间信息,此处的id为直播间号,可以是短号
+func getRoomInfo(roomId int) (info *LiveInfo, err error) {
+	body, err := req.Get(roomInfoUrl, req.D{{"room_id", roomId}})
 	if err != nil {
 		return nil, err
 	}
 	result, err := checkResp(body)
 	if err != nil {
-		return nil, errors.Wrap(err, "read bili resp data")
+		return nil, errors.Wrap(err, "read bili resp data fail")
 	}
-	info = liveInfoPool.Get().(*LiveInfo)
 	data, code, msg := checkBiliData(result)
 	if code != 0 {
-		info.Code = code
-		info.Msg = msg
-		return info, nil
+		return nil, errors.New(fmt.Sprintf("code=%d,msg=%s", code, msg))
 	}
-	info.Mid = mid
-	info.Uname = data.Get("name").String()
+	info = liveInfoPool.Get().(*LiveInfo)
+	roomInfo := data.Get("room_info")
+	if !roomInfo.Exists() || !roomInfo.IsObject() {
+		logger.WithFields(logrus.Fields{
+			"roomId": roomId,
+			"resp":   data.String(),
+		}).Error("[BiliLive]获取data.room_info失败")
+		return nil, errors.New("[BiliLive]获取data.room_info失败")
+	}
+	userInfo := data.Get("anchor_info.base_info")
+	if !userInfo.Exists() || !userInfo.IsObject() {
+		logger.WithFields(logrus.Fields{
+			"roomId": roomId,
+			"resp":   data.String(),
+		}).Error("[BiliLive]获取data.anchor_info.base_info失败")
+		return nil, errors.New("[BiliLive]获取data.anchor_info.base_info失败")
+	}
 
-	liveRoom := data.Get("live_room")
-	if !liveRoom.Exists() {
-		info.Code = 400
-		info.Msg = "响应体中无live_room字段"
+	status := roomInfo.Get("live_status")
+	if !status.Exists() {
+		logger.WithFields(logrus.Fields{
+			"roomId":   roomId,
+			"roomInfo": roomInfo.String(),
+		}).Error("[BiliLive]获取room_info.live_status失败")
+		return nil, errors.New("[BiliLive]获取room_info.live_status失败")
+	}
+	uname := userInfo.Get("uname")
+	if !uname.Exists() {
+		logger.WithFields(logrus.Fields{
+			"roomId":   roomId,
+			"userInfo": userInfo.String(),
+		}).Error("[BiliLive]获取uname失败")
+		return nil, errors.New("[BiliLive]获取uname失败")
+	}
+	info.Mid = roomInfo.Get("uid").Int()
+	info.Uname = uname.String()
+	info.LiveStatus = status.Int() == 1
+	info.RoomId = roomId
+	if !info.LiveStatus {
 		return info, nil
 	}
-	info.LiveStatus = liveRoom.Get("liveStatus").Int() == 1
-	info.RoomId = int(liveRoom.Get("roomid").Int())
-	info.Title = liveRoom.Get("title").String()
-	info.Cover = liveRoom.Get("cover").String()
+	info.Title = roomInfo.Get("title").String()
+	info.Area = fmt.Sprintf("%s-%s",
+		roomInfo.Get("parent_area_name").String(),
+		roomInfo.Get("area_name").String())
+	if len(info.Area) < 3 {
+		info.Area = ""
+		logger.WithFields(logrus.Fields{
+			"roomId":   roomId,
+			"roomInfo": roomInfo.String(),
+		}).Warn("获取直播间分区失败")
+	}
+	info.Cover = roomInfo.Get("cover").String()
 	return info, nil
+}
+
+func (b *BiliLiveSource) sendInfo(id int, now time.Time, ch chan<- *push.Msg) bool {
+	info, err := getRoomInfo(id)
+	if err != nil {
+		logger.WithFields(logrus.Fields{
+			"uid": id,
+			"err": err,
+		}).Error("[BiliLive]获取开播状态失败")
+		return false
+	}
+	//当前开播状态和已经记录的开播状态相同，说明已经发送过消息
+	if info.LiveStatus == b.living[id] {
+		logger.WithFields(logrus.Fields{
+			"id":     info.Mid,
+			"living": info.LiveStatus,
+		}).Debug("[BiliLive]开播状态未改变")
+		info.Reset()
+		liveInfoPool.Put(info)
+		return false
+	}
+	msg := &push.Msg{
+		Times:  now,
+		Flag:   BiliLiveMsg,
+		Author: info.Uname,
+	}
+
+	b.living[id] = info.LiveStatus
+	if info.LiveStatus {
+		//开播
+		msg.Title = "开播了"
+		if info.Area != "" {
+			msg.Text = fmt.Sprintf("标题：\"%s\"\n分区：\"%s\"", info.Title, info.Area)
+		} else {
+			msg.Text = fmt.Sprintf("标题：\"%s\"", info.Title)
+		}
+		msg.Img = []string{info.Cover}
+		msg.Src = fmt.Sprintf("%s%d", liveUrlPrefix, info.RoomId)
+		logger.WithFields(logrus.Fields{
+			"id":   id,
+			"name": info.Uname,
+		}).Debug("[BiliLive]b站直播间开播")
+	} else {
+		//下播
+		msg.Title = "下播了"
+		msg.Text = "😭😭😭"
+		logger.WithFields(logrus.Fields{
+			"id":   id,
+			"name": info.Uname,
+		}).Debug("[BiliLive]b站直播间下播")
+	}
+	ch <- msg
+	info.Reset()
+	liveInfoPool.Put(info)
+	return true
 }
 
 func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
@@ -150,66 +238,13 @@ func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("停止监控b站直播间")
+			logger.Info("[BiliLive]停止监控b站直播间")
 			return
 		case now := <-ticker.C:
-			for _, id := range b.uid {
-				info, err := getInfo(id)
-				if err != nil {
-					logger.WithFields(logrus.Fields{
-						"uid": id,
-						"err": err,
-					}).Error("获取开播状态失败")
+			for _, id := range b.room {
+				if !b.sendInfo(id, now, ch) {
 					continue
 				}
-				//当前开播状态和已经记录的开播状态相同，说明已经发送过消息
-				if info.Code == 0 && info.LiveStatus == b.living[id] {
-					logger.WithFields(logrus.Fields{
-						"mid":    info.Mid,
-						"living": info.LiveStatus,
-					}).Debug("开播状态未改变")
-					info.Reset()
-					liveInfoPool.Put(info)
-					continue
-				}
-				msg := &push.Msg{
-					Times:  now,
-					Flag:   BiliLiveMsg,
-					Author: info.Uname,
-				}
-				if info.Code != 0 {
-					logger.WithFields(logrus.Fields{
-						"id":   id,
-						"code": info.Code,
-						"msg":  info.Msg,
-					}).Warn("获取开播状态失败")
-					msg.Title = "获取直播间状态失败"
-					msg.Text = fmt.Sprintf("[error] %s, code=%d", info.Msg, info.Code)
-				} else {
-					b.living[id] = info.LiveStatus
-					if info.LiveStatus {
-						//开播
-						msg.Title = "开播了"
-						msg.Text = fmt.Sprintf("标题：\"%s\"", info.Title)
-						msg.Img = []string{info.Cover}
-						msg.Src = fmt.Sprintf("%s%d", liveUrlPrefix, info.RoomId)
-						logger.WithFields(logrus.Fields{
-							"mid":  id,
-							"name": info.Uname,
-						}).Debug("b站直播间开播")
-					} else {
-						//下播
-						msg.Title = "下播了"
-						msg.Text = "😭😭😭"
-						logger.WithFields(logrus.Fields{
-							"mid":  id,
-							"name": info.Uname,
-						}).Debug("b站直播间下播")
-					}
-				}
-				ch <- msg
-				info.Reset()
-				liveInfoPool.Put(info)
 				time.Sleep(waitInterval)
 			}
 		}
@@ -226,6 +261,9 @@ const (
 	DynamicTypePGC     = "DYNAMIC_TYPE_PGC"       //分享番剧
 	DynamicTypeLive    = "DYNAMIC_TYPE_LIVE_RCMD" //开播推送的动态，不做处理
 )
+
+// 让编译器检查*BiliDynamicSource实现了Source接口
+var _ Source = (*BiliDynamicSource)(nil)
 
 type BiliDynamicSource struct {
 	uid       []int64
@@ -254,7 +292,7 @@ func (d *DynamicInfo) Reset() {
 func NewBiliDynamicSource(uid []int64) *BiliDynamicSource {
 	logger.WithFields(logrus.Fields{
 		"uid": uid,
-	}).Info("监控b站动态更新")
+	}).Info("[BiliDyn]监控b站动态更新")
 	return &BiliDynamicSource{
 		uid:       uid,
 		lastTable: make(map[int64]int64),
@@ -267,7 +305,7 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("停止b站动态监控")
+			logger.Info("[BiliDyn]停止b站动态监控")
 			return
 		case now := <-ticker.C:
 			for _, id := range b.uid {
@@ -276,13 +314,13 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 					logger.WithFields(logrus.Fields{
 						"id":  id,
 						"err": err,
-					}).Error("获取b站动态失败")
+					}).Error("[BiliDyn]获取b站动态失败")
 					continue
 				}
 				if len(infos) == 0 {
 					logger.WithFields(logrus.Fields{
 						"id": id,
-					}).Debug("无新动态")
+					}).Debug("[BiliDyn]无新动态")
 				}
 				for _, info := range infos {
 					logger.WithFields(logrus.Fields{
@@ -290,7 +328,7 @@ func (b *BiliDynamicSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 						"name":  info.author,
 						"title": info.types,
 						"src":   info.src,
-					}).Debug("更新动态")
+					}).Debug("[BiliDyn]更新动态")
 					msg := &push.Msg{
 						Flag:   BiliDynMsg,
 						Times:  info.times,
@@ -329,7 +367,15 @@ func (b *BiliDynamicSource) space(id int64, now time.Time) (infos []*DynamicInfo
 	if code != 0 {
 		return nil, errors.New(msg)
 	}
-	items := data.Get("items").Array()
+	dyns := data.Get("items")
+	if !dyns.Exists() || !dyns.IsArray() {
+		logger.WithFields(logrus.Fields{
+			"mid":  id,
+			"resp": data.String(),
+		}).Error("[BiliDyn]获取items失败")
+		return nil, errors.New("不存在data.items字段")
+	}
+	items := dyns.Array()
 
 	infos = make([]*DynamicInfo, 0, len(items))
 	var newest int64
@@ -345,7 +391,7 @@ func (b *BiliDynamicSource) space(id int64, now time.Time) (infos []*DynamicInfo
 					"mid":    id,
 					"author": info.author,
 					"types":  info.types,
-				}).Debug("忽略开播动态")
+				}).Debug("[BiliDyn]忽略开播动态")
 				continue
 			}
 			second := info.times.Unix()
@@ -356,14 +402,14 @@ func (b *BiliDynamicSource) space(id int64, now time.Time) (infos []*DynamicInfo
 				logger.WithFields(logrus.Fields{
 					"mid": id,
 					"src": info.src,
-				}).Debug("过滤动态")
+				}).Debug("[BiliDyn]过滤动态")
 				info.Reset()
 				dynInfoPool.Put(info)
 			}
 		} else {
 			logger.WithFields(logrus.Fields{
 				"id": id,
-			}).Warn("解析的动态为nil")
+			}).Warn("[BiliDyn]解析的动态为nil")
 		}
 	}
 	last = max(last, newest)
@@ -390,6 +436,9 @@ func parseDynamic(item *gjson.Result) *DynamicInfo {
 	info.times = time.Unix(pubTs, 0)
 
 	dynamic := item.Get("modules.module_dynamic")
+	if !dynamic.Exists() {
+		return nil
+	}
 	switch types {
 	case DynamicTypeWord:
 		info.types = "发布动态"
@@ -458,6 +507,9 @@ func parseDynamic(item *gjson.Result) *DynamicInfo {
 	default:
 		info.types = "发布动态"
 		info.text = "未处理的动态类型"
+		logger.WithFields(logrus.Fields{
+			"resp": item.String(),
+		}).Warn("[BiliDyn]未处理的动态类型")
 	}
 	return info
 }

@@ -15,6 +15,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+var _ Pusher = (*DingTalk)(nil)
+
 // DingTalk 钉钉群机器人
 type DingTalk struct {
 	webhook string //webhook地址
