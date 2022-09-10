@@ -252,14 +252,15 @@ func (b *BiliLiveSource) Send(ctx context.Context, ch chan<- *push.Msg) {
 }
 
 const (
-	DynamicTypeForward = "DYNAMIC_TYPE_FORWARD"   //转发动态
-	DynamicTypeDraw    = "DYNAMIC_TYPE_DRAW"      //带图片动态
-	DynamicTypeAV      = "DYNAMIC_TYPE_AV"        //视频
-	DynamicTypeWord    = "DYNAMIC_TYPE_WORD"      //纯文本
-	DynamicTypeArticle = "DYNAMIC_TYPE_ARTICLE"   //专栏
-	DynamicTypeMusic   = "DYNAMIC_TYPE_MUSIC"     //音频
-	DynamicTypePGC     = "DYNAMIC_TYPE_PGC"       //分享番剧
-	DynamicTypeLive    = "DYNAMIC_TYPE_LIVE_RCMD" //开播推送的动态，不做处理
+	DynamicTypeForward  = "DYNAMIC_TYPE_FORWARD"   //转发动态
+	DynamicTypeDraw     = "DYNAMIC_TYPE_DRAW"      //带图片动态
+	DynamicTypeAV       = "DYNAMIC_TYPE_AV"        //视频
+	DynamicTypeWord     = "DYNAMIC_TYPE_WORD"      //纯文本
+	DynamicTypeArticle  = "DYNAMIC_TYPE_ARTICLE"   //专栏
+	DynamicTypeMusic    = "DYNAMIC_TYPE_MUSIC"     //音频
+	DynamicTypePGC      = "DYNAMIC_TYPE_PGC"       //分享番剧
+	DynamicTypeLiveRCMD = "DYNAMIC_TYPE_LIVE_RCMD" //开播推送的动态，不做处理
+	DynamicTypeLive     = "DYNAMIC_TYPE_LIVE"      //分享直播间
 )
 
 // 让编译器检查*BiliDynamicSource实现了Source接口
@@ -386,7 +387,7 @@ func (b *BiliDynamicSource) space(id int64, now time.Time) (infos []*DynamicInfo
 	for _, item := range items {
 		info := parseDynamic(&item)
 		if info != nil {
-			if info.types == DynamicTypeLive {
+			if info.types == DynamicTypeLiveRCMD {
 				logger.WithFields(logrus.Fields{
 					"mid":    id,
 					"author": info.author,
@@ -468,7 +469,7 @@ func parseDynamic(item *gjson.Result) *DynamicInfo {
 		if origInfo == nil {
 			return nil
 		}
-		if origInfo.types == DynamicTypeLive {
+		if origInfo.types == DynamicTypeLiveRCMD || origInfo.types == DynamicTypeLive {
 			info.types = "分享直播间"
 			info.text = fmt.Sprintf("%s\n分享\"%s\"的直播间\n%s", text, origInfo.author, origInfo.text)
 		} else {
@@ -495,8 +496,8 @@ func parseDynamic(item *gjson.Result) *DynamicInfo {
 		pgc := dynamic.Get("major.pgc")
 		info.text = pgc.Get("title").String()
 		info.img = []string{pgc.Get("cover").String()}
-	case DynamicTypeLive:
-		info.types = DynamicTypeLive
+	case DynamicTypeLiveRCMD:
+		info.types = DynamicTypeLiveRCMD
 		content := dynamic.Get("major.live_rcmd.content").String()
 		if content == "" {
 			return nil
@@ -504,6 +505,14 @@ func parseDynamic(item *gjson.Result) *DynamicInfo {
 		liveInfo := gjson.Get(content, "live_play_info")
 		info.text = fmt.Sprintf("标题：\"%s\"", liveInfo.Get("title").String())
 		info.img = []string{liveInfo.Get("cover").String()}
+	case DynamicTypeLive:
+		info.types = DynamicTypeLive
+		live := dynamic.Get("major.live")
+		if !live.Exists() || !live.IsObject() {
+			return nil
+		}
+		info.text = fmt.Sprintf(`标题："%s"`, live.Get("title").String())
+		info.img = []string{live.Get("cover").String()}
 	default:
 		info.types = "发布动态"
 		info.text = "未处理的动态类型"
